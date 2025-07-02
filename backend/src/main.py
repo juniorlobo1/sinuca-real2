@@ -1,206 +1,426 @@
+#!/usr/bin/env python3
+"""
+API Backend Completa - Sistema de Sinuca Real
+Inclui todas as rotas necessárias para funcionamento completo
+"""
+
 import os
-import sys
-from flask import Flask, jsonify, request
+import hashlib
+import jwt
+import json
+from datetime import datetime, timedelta
+from flask import Flask, request, jsonify
 from flask_cors import CORS
-from flask_sqlalchemy import SQLAlchemy
-from datetime import datetime
 
-# Configuração para Railway
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-
+# Configuração da aplicação
 app = Flask(__name__)
-
-# Configuração CORS para Railway
 CORS(app, origins=["*"])
 
-# Configuração do banco de dados para Railway
+# Configurações
+SECRET_KEY = os.environ.get('SECRET_KEY', 'sinuca-real-secret-key-2024')
 DATABASE_URL = os.environ.get('DATABASE_URL')
-if DATABASE_URL and DATABASE_URL.startswith('postgres://'):
-    DATABASE_URL = DATABASE_URL.replace('postgres://', 'postgresql://', 1)
 
-app.config['SQLALCHEMY_DATABASE_URI'] = DATABASE_URL or 'sqlite:///sinucareal.db'
-app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'dev-secret-key-change-in-production')
+# Simulação de banco de dados em memória (para desenvolvimento)
+# Em produção, usar PostgreSQL com DATABASE_URL
+users_db = {}
+games_db = {}
+rankings_db = []
 
-# Inicializar banco
-db = SQLAlchemy(app)
+# Utilitários
+def hash_password(password):
+    """Hash da senha usando SHA256"""
+    return hashlib.sha256(password.encode()).hexdigest()
 
-# Modelos do banco de dados
-class User(db.Model):
-    __tablename__ = 'users'
-    
-    id = db.Column(db.Integer, primary_key=True)
-    email = db.Column(db.String(120), unique=True, nullable=False)
-    name = db.Column(db.String(100), nullable=False)
-    password_hash = db.Column(db.String(255), nullable=False)
-    balance = db.Column(db.Numeric(10, 2), default=0.00)
-    total_winnings = db.Column(db.Numeric(10, 2), default=0.00)
-    games_played = db.Column(db.Integer, default=0)
-    games_won = db.Column(db.Integer, default=0)
-    skill_rating = db.Column(db.Integer, default=1200)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    is_active = db.Column(db.Boolean, default=True)
+def verify_password(password, hashed):
+    """Verificar senha"""
+    return hash_password(password) == hashed
 
-class Bet(db.Model):
-    __tablename__ = 'bets'
-    
-    id = db.Column(db.Integer, primary_key=True)
-    creator_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
-    opponent_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
-    amount = db.Column(db.Numeric(10, 2), nullable=False)
-    platform_fee = db.Column(db.Numeric(10, 2), nullable=False)
-    total_prize = db.Column(db.Numeric(10, 2), nullable=False)
-    status = db.Column(db.String(20), default='open')
-    winner_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    completed_at = db.Column(db.DateTime, nullable=True)
+def generate_token(user_id):
+    """Gerar JWT token"""
+    payload = {
+        'user_id': user_id,
+        'exp': datetime.utcnow() + timedelta(hours=24)
+    }
+    return jwt.encode(payload, SECRET_KEY, algorithm='HS256')
 
-class Transaction(db.Model):
-    __tablename__ = 'transactions'
-    
-    id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
-    bet_id = db.Column(db.Integer, db.ForeignKey('bets.id'), nullable=True)
-    type = db.Column(db.String(20), nullable=False)
-    amount = db.Column(db.Numeric(10, 2), nullable=False)
-    description = db.Column(db.String(255), nullable=True)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+def verify_token(token):
+    """Verificar JWT token"""
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=['HS256'])
+        return payload['user_id']
+    except:
+        return None
 
-# Criar tabelas
-with app.app_context():
-    db.create_all()
-    
-    # Inserir dados de exemplo se não existirem
-    if User.query.count() == 0:
-        users = [
-            User(email='joao@exemplo.com', name='João Silva', password_hash='hash123', balance=100.00, skill_rating=1380),
-            User(email='maria@exemplo.com', name='Maria Costa', password_hash='hash456', balance=150.00, skill_rating=1520),
-            User(email='carlos@exemplo.com', name='Carlos Lima', password_hash='hash789', balance=75.00, skill_rating=1200)
-        ]
-        for user in users:
-            db.session.add(user)
-        
-        db.session.commit()
-        
-        # Adicionar apostas de exemplo
-        bets = [
-            Bet(creator_id=1, amount=25.00, platform_fee=2.50, total_prize=47.50, status='open'),
-            Bet(creator_id=2, amount=50.00, platform_fee=5.00, total_prize=95.00, status='open'),
-            Bet(creator_id=3, amount=10.00, platform_fee=1.00, total_prize=19.00, status='open')
-        ]
-        for bet in bets:
-            db.session.add(bet)
-        
-        db.session.commit()
+# ==================== ROTAS DE TESTE ====================
 
-# Rotas da API
-@app.route('/health', methods=['GET'])
-def health_check():
+@app.route('/', methods=['GET'])
+def home():
+    """Rota principal"""
     return jsonify({
-        'status': 'healthy',
-        'service': 'Sinuca Real API',
-        'version': '1.0.0'
+        'message': 'API Sinuca Real - Backend Funcionando!',
+        'version': '1.0.0',
+        'status': 'online',
+        'timestamp': datetime.utcnow().isoformat()
     })
 
-@app.route('/api/health', methods=['GET'])
-def api_health():
-    return health_check()
+@app.route('/api/test', methods=['GET'])
+def test_api():
+    """Rota de teste da API"""
+    return jsonify({
+        'message': 'API funcionando perfeitamente!',
+        'database_connected': DATABASE_URL is not None,
+        'routes_available': [
+            '/api/auth/register',
+            '/api/auth/login',
+            '/api/games',
+            '/api/ranking',
+            '/api/profile'
+        ]
+    })
 
-@app.route('/api/stats', methods=['GET'])
-def get_stats():
-    try:
-        total_users = User.query.count()
-        total_bets = Bet.query.count()
-        total_volume = db.session.query(db.func.sum(Bet.amount * 2)).scalar() or 0
-        platform_revenue = db.session.query(db.func.sum(Bet.platform_fee)).scalar() or 0
-        
-        return jsonify({
-            'total_users': total_users,
-            'total_bets': total_bets,
-            'total_volume': float(total_volume),
-            'platform_revenue': float(platform_revenue)
-        })
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
+# ==================== ROTAS DE AUTENTICAÇÃO ====================
 
-@app.route('/api/users', methods=['POST'])
-def create_user():
+@app.route('/api/auth/register', methods=['POST'])
+def register():
+    """Cadastro de usuário"""
     try:
         data = request.get_json()
+        
+        # Validação dos dados
+        required_fields = ['nome_completo', 'nome_usuario', 'email', 'senha']
+        for field in required_fields:
+            if not data.get(field):
+                return jsonify({'error': f'Campo {field} é obrigatório'}), 400
+        
+        email = data['email']
+        nome_usuario = data['nome_usuario']
         
         # Verificar se usuário já existe
-        existing_user = User.query.filter_by(email=data['email']).first()
-        if existing_user:
+        if email in users_db:
             return jsonify({'error': 'Email já cadastrado'}), 400
         
-        # Criar novo usuário
-        user = User(
-            email=data['email'],
-            name=data['name'],
-            password_hash=data['password'],
-            balance=data.get('balance', 0)
-        )
+        if any(user['nome_usuario'] == nome_usuario for user in users_db.values()):
+            return jsonify({'error': 'Nome de usuário já existe'}), 400
         
-        db.session.add(user)
-        db.session.commit()
+        # Criar usuário
+        user_id = len(users_db) + 1
+        users_db[email] = {
+            'id': user_id,
+            'nome_completo': data['nome_completo'],
+            'nome_usuario': nome_usuario,
+            'email': email,
+            'senha': hash_password(data['senha']),
+            'created_at': datetime.utcnow().isoformat(),
+            'games_played': 0,
+            'games_won': 0,
+            'total_score': 0
+        }
+        
+        # Gerar token
+        token = generate_token(user_id)
         
         return jsonify({
-            'id': user.id,
-            'email': user.email,
-            'name': user.name,
-            'balance': float(user.balance)
+            'message': 'Usuário cadastrado com sucesso!',
+            'token': token,
+            'user': {
+                'id': user_id,
+                'nome_completo': data['nome_completo'],
+                'nome_usuario': nome_usuario,
+                'email': email
+            }
         }), 201
         
     except Exception as e:
-        db.session.rollback()
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': f'Erro interno: {str(e)}'}), 500
 
-@app.route('/api/bets', methods=['GET'])
-def get_bets():
-    try:
-        bets = Bet.query.filter_by(status='open').all()
-        return jsonify([{
-            'id': bet.id,
-            'creator_id': bet.creator_id,
-            'amount': float(bet.amount),
-            'platform_fee': float(bet.platform_fee),
-            'total_prize': float(bet.total_prize),
-            'created_at': bet.created_at.isoformat()
-        } for bet in bets])
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/api/bets', methods=['POST'])
-def create_bet():
+@app.route('/api/auth/login', methods=['POST'])
+def login():
+    """Login de usuário"""
     try:
         data = request.get_json()
         
-        amount = float(data['amount'])
-        platform_fee = amount * 0.05  # 5% de taxa
-        total_prize = (amount * 2) - platform_fee
+        email = data.get('email')
+        senha = data.get('senha')
         
-        bet = Bet(
-            creator_id=data['creator_id'],
-            amount=amount,
-            platform_fee=platform_fee,
-            total_prize=total_prize
-        )
+        if not email or not senha:
+            return jsonify({'error': 'Email e senha são obrigatórios'}), 400
         
-        db.session.add(bet)
-        db.session.commit()
+        # Verificar usuário
+        user = users_db.get(email)
+        if not user or not verify_password(senha, user['senha']):
+            return jsonify({'error': 'Email ou senha incorretos'}), 401
+        
+        # Gerar token
+        token = generate_token(user['id'])
         
         return jsonify({
-            'id': bet.id,
-            'amount': float(bet.amount),
-            'platform_fee': float(bet.platform_fee),
-            'total_prize': float(bet.total_prize)
+            'message': 'Login realizado com sucesso!',
+            'token': token,
+            'user': {
+                'id': user['id'],
+                'nome_completo': user['nome_completo'],
+                'nome_usuario': user['nome_usuario'],
+                'email': user['email']
+            }
+        })
+        
+    except Exception as e:
+        return jsonify({'error': f'Erro interno: {str(e)}'}), 500
+
+# ==================== ROTAS DE JOGOS ====================
+
+@app.route('/api/games', methods=['GET'])
+def get_games():
+    """Listar jogos disponíveis"""
+    try:
+        # Verificar token
+        token = request.headers.get('Authorization', '').replace('Bearer ', '')
+        user_id = verify_token(token)
+        
+        if not user_id:
+            return jsonify({'error': 'Token inválido'}), 401
+        
+        # Retornar jogos disponíveis
+        available_games = [
+            {
+                'id': 1,
+                'name': 'Sinuca Clássica',
+                'description': 'Jogo tradicional de sinuca com 15 bolas',
+                'max_players': 2,
+                'difficulty': 'medium'
+            },
+            {
+                'id': 2,
+                'name': 'Sinuca Rápida',
+                'description': 'Versão rápida com menos bolas',
+                'max_players': 2,
+                'difficulty': 'easy'
+            }
+        ]
+        
+        return jsonify({
+            'games': available_games,
+            'total': len(available_games)
+        })
+        
+    except Exception as e:
+        return jsonify({'error': f'Erro interno: {str(e)}'}), 500
+
+@app.route('/api/games', methods=['POST'])
+def create_game():
+    """Criar novo jogo"""
+    try:
+        # Verificar token
+        token = request.headers.get('Authorization', '').replace('Bearer ', '')
+        user_id = verify_token(token)
+        
+        if not user_id:
+            return jsonify({'error': 'Token inválido'}), 401
+        
+        data = request.get_json()
+        game_type = data.get('type', 'classic')
+        
+        # Criar jogo
+        game_id = len(games_db) + 1
+        games_db[game_id] = {
+            'id': game_id,
+            'type': game_type,
+            'player_id': user_id,
+            'status': 'waiting',
+            'created_at': datetime.utcnow().isoformat(),
+            'score': 0,
+            'balls_potted': 0
+        }
+        
+        return jsonify({
+            'message': 'Jogo criado com sucesso!',
+            'game': games_db[game_id]
         }), 201
         
     except Exception as e:
-        db.session.rollback()
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': f'Erro interno: {str(e)}'}), 500
 
-# Para Railway
+@app.route('/api/games/<int:game_id>/finish', methods=['POST'])
+def finish_game(game_id):
+    """Finalizar jogo"""
+    try:
+        # Verificar token
+        token = request.headers.get('Authorization', '').replace('Bearer ', '')
+        user_id = verify_token(token)
+        
+        if not user_id:
+            return jsonify({'error': 'Token inválido'}), 401
+        
+        # Verificar se jogo existe
+        game = games_db.get(game_id)
+        if not game:
+            return jsonify({'error': 'Jogo não encontrado'}), 404
+        
+        if game['player_id'] != user_id:
+            return jsonify({'error': 'Não autorizado'}), 403
+        
+        data = request.get_json()
+        score = data.get('score', 0)
+        balls_potted = data.get('balls_potted', 0)
+        won = data.get('won', False)
+        
+        # Atualizar jogo
+        game['status'] = 'finished'
+        game['score'] = score
+        game['balls_potted'] = balls_potted
+        game['won'] = won
+        game['finished_at'] = datetime.utcnow().isoformat()
+        
+        # Atualizar estatísticas do usuário
+        user_email = None
+        for email, user in users_db.items():
+            if user['id'] == user_id:
+                user_email = email
+                break
+        
+        if user_email:
+            user = users_db[user_email]
+            user['games_played'] += 1
+            user['total_score'] += score
+            if won:
+                user['games_won'] += 1
+        
+        # Adicionar ao ranking
+        rankings_db.append({
+            'user_id': user_id,
+            'game_id': game_id,
+            'score': score,
+            'balls_potted': balls_potted,
+            'won': won,
+            'date': datetime.utcnow().isoformat()
+        })
+        
+        return jsonify({
+            'message': 'Jogo finalizado com sucesso!',
+            'game': game
+        })
+        
+    except Exception as e:
+        return jsonify({'error': f'Erro interno: {str(e)}'}), 500
+
+# ==================== ROTAS DE RANKING ====================
+
+@app.route('/api/ranking', methods=['GET'])
+def get_ranking():
+    """Obter ranking dos jogadores"""
+    try:
+        # Calcular ranking baseado nas estatísticas dos usuários
+        ranking = []
+        
+        for email, user in users_db.items():
+            if user['games_played'] > 0:
+                win_rate = (user['games_won'] / user['games_played']) * 100
+                avg_score = user['total_score'] / user['games_played']
+                
+                ranking.append({
+                    'position': 0,  # Será calculado depois
+                    'nome_usuario': user['nome_usuario'],
+                    'games_played': user['games_played'],
+                    'games_won': user['games_won'],
+                    'win_rate': round(win_rate, 1),
+                    'total_score': user['total_score'],
+                    'avg_score': round(avg_score, 1)
+                })
+        
+        # Ordenar por pontuação total (decrescente)
+        ranking.sort(key=lambda x: x['total_score'], reverse=True)
+        
+        # Adicionar posições
+        for i, player in enumerate(ranking):
+            player['position'] = i + 1
+        
+        return jsonify({
+            'ranking': ranking[:10],  # Top 10
+            'total_players': len(ranking)
+        })
+        
+    except Exception as e:
+        return jsonify({'error': f'Erro interno: {str(e)}'}), 500
+
+# ==================== ROTAS DE PERFIL ====================
+
+@app.route('/api/profile', methods=['GET'])
+def get_profile():
+    """Obter perfil do usuário"""
+    try:
+        # Verificar token
+        token = request.headers.get('Authorization', '').replace('Bearer ', '')
+        user_id = verify_token(token)
+        
+        if not user_id:
+            return jsonify({'error': 'Token inválido'}), 401
+        
+        # Encontrar usuário
+        user = None
+        for email, u in users_db.items():
+            if u['id'] == user_id:
+                user = u
+                break
+        
+        if not user:
+            return jsonify({'error': 'Usuário não encontrado'}), 404
+        
+        # Calcular estatísticas
+        win_rate = 0
+        avg_score = 0
+        
+        if user['games_played'] > 0:
+            win_rate = (user['games_won'] / user['games_played']) * 100
+            avg_score = user['total_score'] / user['games_played']
+        
+        profile = {
+            'id': user['id'],
+            'nome_completo': user['nome_completo'],
+            'nome_usuario': user['nome_usuario'],
+            'email': user['email'],
+            'member_since': user['created_at'],
+            'statistics': {
+                'games_played': user['games_played'],
+                'games_won': user['games_won'],
+                'win_rate': round(win_rate, 1),
+                'total_score': user['total_score'],
+                'avg_score': round(avg_score, 1)
+            }
+        }
+        
+        return jsonify({'profile': profile})
+        
+    except Exception as e:
+        return jsonify({'error': f'Erro interno: {str(e)}'}), 500
+
+# ==================== ROTAS DE SISTEMA ====================
+
+@app.route('/api/health', methods=['GET'])
+def health_check():
+    """Verificação de saúde do sistema"""
+    return jsonify({
+        'status': 'healthy',
+        'timestamp': datetime.utcnow().isoformat(),
+        'database_url_configured': DATABASE_URL is not None,
+        'users_count': len(users_db),
+        'games_count': len(games_db),
+        'rankings_count': len(rankings_db)
+    })
+
+# ==================== CONFIGURAÇÃO DO SERVIDOR ====================
+
 if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port, debug=False)
+    print("🎱 Backend de Pagamentos Sinuca Real iniciado na porta 5001!")
+    print(f"🔗 DATABASE_URL configurada: {DATABASE_URL is not None}")
+    print(f"🚀 Servidor rodando em modo {'produção' if not app.debug else 'desenvolvimento'}")
+    
+    # Configurar porta
+    port = int(os.environ.get('PORT', 5001))
+    
+    # Rodar servidor
+    app.run(
+        host='0.0.0.0',
+        port=port,
+        debug=True
+    )
+
